@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ProChat • Realtime</title>
+
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+
+    <script src="https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
+
+    <style>
+        body {
+            background: #0a0a0a;
+            color: #e0e0e0;
+            height: 100vh;
+            margin: 0;
+            font-family: system-ui, -apple-system, sans-serif;
+            overflow: hidden;
+        }
+
+        .chat-wrapper {
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Header with Name */
+        .chat-header {
+            background: #111;
+            border-bottom: 1px solid #222;
+            padding: 12px 20px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .chat-header h5 {
+            margin: 0;
+            font-weight: 600;
+            color: #00d4aa;
+        }
+
+        .name-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-left: auto;
+        }
+
+        .name-group label {
+            font-size: 0.9rem;
+            color: #aaa;
+            margin: 0;
+        }
+
+        /* Chat Area */
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            background: #0f0f0f;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .message {
+            display: flex;
+            max-width: 75%;
+            gap: 10px;
+        }
+
+        .message.received { align-self: flex-start; }
+        .message.sent { align-self: flex-end; flex-direction: row-reverse; }
+
+        .avatar {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: #222;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 1.1rem;
+            flex-shrink: 0;
+        }
+
+        .bubble {
+            padding: 12px 16px;
+            border-radius: 18px;
+            font-size: 0.98rem;
+            line-height: 1.4;
+            word-wrap: break-word;
+        }
+
+        .received .bubble {
+            background: #1f1f1f;
+            border-bottom-left-radius: 4px;
+        }
+
+        .sent .bubble {
+            background: #00b894;
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+
+        .message-meta {
+            font-size: 0.75rem;
+            color: #888;
+            margin-top: 4px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        /* Input Area */
+        .input-area {
+            background: #111;
+            border-top: 1px solid #222;
+            padding: 16px 20px;
+        }
+
+        .input-group .form-control {
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 30px;
+            padding: 14px 20px;
+            color: white;
+        }
+
+        .input-group .btn {
+            width: 52px;
+            height: 52px;
+            border-radius: 50%;
+            background: #00b894;
+            border: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .input-group .btn:disabled {
+            background: #444;
+        }
+
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #333;
+            border-radius: 3px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="chat-wrapper">
+
+    <!-- Header + Name Bar -->
+    <div class="chat-header">
+        <h5><i class="fa-solid fa-comments me-2"></i> ProChat</h5>
+
+        <div class="name-group">
+            <label>Your Name:</label>
+            <input type="text" id="senderInput" class="form-control form-control-sm"
+                   style="width: 180px;" maxlength="25" value="Guest">
+        </div>
+    </div>
+
+    <!-- Chat Messages -->
+    <div class="chat-messages" id="chat"></div>
+
+    <!-- Message Input -->
+    <div class="input-area">
+        <div class="input-group">
+            <input type="text" id="messageInput" class="form-control"
+                   placeholder="Type your message..." autocomplete="off">
+            <button class="btn" id="sendButton" disabled>
+                <i class="fa-solid fa-paper-plane"></i>
+            </button>
+        </div>
+    </div>
+
+</div>
+
+<script>
+    let stompClient = null;
+    let username = "Guest";
+    let isConnected = false;
+
+    const chatDiv = document.getElementById("chat");
+    const messageInput = document.getElementById("messageInput");
+    const sendButton = document.getElementById("sendButton");
+    const senderInput = document.getElementById("senderInput");
+
+    // Update username live
+    senderInput.addEventListener("input", () => {
+        username = senderInput.value.trim() || "Guest";
+    });
+
+    function connect() {
+        const socket = new SockJS('/chat');
+        stompClient = Stomp.over(socket);
+
+        stompClient.connect({}, function () {
+            isConnected = true;
+            sendButton.disabled = false;
+
+            stompClient.subscribe('/topic/messages', function (message) {
+                showMessage(JSON.parse(message.body));
+            });
+        }, function (error) {
+            console.error("Connection error:", error);
+            isConnected = false;
+            sendButton.disabled = true;
+        });
+    }
+
+    function showMessage(message) {
+        const isSent = message.sender === username;
+
+        const msgContainer = document.createElement("div");
+        msgContainer.className = `message ${isSent ? "sent" : "received"}`;
+
+        // Avatar
+        const avatar = document.createElement("div");
+        avatar.className = "avatar";
+        avatar.textContent = message.sender.charAt(0).toUpperCase();
+
+        // Bubble
+        const bubble = document.createElement("div");
+        bubble.className = "bubble";
+        bubble.textContent = message.content;
+
+        // Meta
+        const meta = document.createElement("div");
+        meta.className = "message-meta";
+        meta.innerHTML = `
+            <span>${isSent ? "You" : message.sender}</span>
+            <span>•</span>
+            <span>${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+        `;
+
+        msgContainer.appendChild(avatar);
+        msgContainer.appendChild(bubble);
+        msgContainer.appendChild(meta);
+
+        chatDiv.appendChild(msgContainer);
+        chatDiv.scrollTop = chatDiv.scrollHeight;
+    }
+
+    function sendMessage() {
+        const content = messageInput.value.trim();
+
+        if (!content || !isConnected || !stompClient) return;
+
+        const chatMessage = {
+            sender: username,
+            content: content
+        };
+
+        stompClient.send("/app/sendMessage", {}, JSON.stringify(chatMessage));
+        messageInput.value = "";
+    }
+
+    // Event Listeners
+    sendButton.addEventListener("click", sendMessage);
+
+    messageInput.addEventListener("keypress", (e) => {
+        if (e.key === "Enter") {
+            e.preventDefault();
+            sendMessage();
+        }
+    });
+
+    // Enable/disable send button based on input
+    messageInput.addEventListener("input", () => {
+        sendButton.disabled = !messageInput.value.trim() || !isConnected;
+    });
+
+    // Auto connect on load
+    window.onload = () => {
+        username = senderInput.value.trim() || "Guest";
+        connect();
+    };
+</script>
+
+</body>
+</html>
